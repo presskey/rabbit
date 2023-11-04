@@ -16,25 +16,28 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+const RABBITMQ_LOCAL_URL = "amqp://localhost:5672/"
+
 type Rabbit struct {
 	QueueConnection queue.Conn
+	App             fyne.App
 }
 
-func NewRabbit(queueConnection queue.Conn) *Rabbit {
+func NewRabbit() *Rabbit {
 	return &Rabbit{
-		QueueConnection: queueConnection,
+		QueueConnection: queue.Conn{},
+		App:             app.NewWithID("com.example.rabbit"),
 	}
 }
 
 func (r Rabbit) Start() {
-	myApp := app.New()
-	myApp.Settings().SetTheme(theme.DarkTheme())
+	r.App.Settings().SetTheme(theme.DarkTheme())
 
-	myWindow := myApp.NewWindow("🐇")
+	myWindow := r.App.NewWindow("🐇")
 	myWindow.SetMaster()
 	myWindow.SetFixedSize(true)
 	myWindow.CenterOnScreen()
-	myWindow.Resize(fyne.NewSize(400, 400))
+	myWindow.Resize(fyne.NewSize(400, 530))
 
 	messageBinding := binding.NewString()
 
@@ -76,14 +79,57 @@ func (r Rabbit) Start() {
 		}
 	})
 
+	toolbar := widget.NewToolbar(
+		widget.NewToolbarSpacer(),
+		widget.NewToolbarAction(theme.SettingsIcon(), func() {
+			for _, w := range r.App.Driver().AllWindows() {
+				if w.Title() == "[settings]" {
+					return
+				}
+			}
+
+			settingsWindow := r.App.NewWindow("[settings]")
+			settingsWindow.Resize(fyne.NewSize(400, 85))
+
+			urlBinding := binding.NewString()
+			urlLabel := widget.NewLabel("RabbitMQ URL")
+			urlEntry := widget.NewEntryWithData(urlBinding)
+			url := r.App.Preferences().StringWithFallback("RabbitMQUrl", RABBITMQ_LOCAL_URL)
+			urlBinding.Set(url)
+
+			saveButton := widget.NewButton("save", func() {
+				url, _ := urlBinding.Get()
+				if url == "" {
+					url = RABBITMQ_LOCAL_URL
+				}
+				r.App.Preferences().SetString("RabbitMQUrl", url)
+				r.QueueConnection, _ = queue.GetConn(url)
+				settingsWindow.Close()
+			})
+
+			settingsContainer := container.New(
+				layout.NewVBoxLayout(),
+				container.New(layout.NewFormLayout(), urlLabel, urlEntry),
+				saveButton,
+			)
+
+			settingsWindow.SetContent(settingsContainer)
+			settingsWindow.Show()
+		}),
+	)
+
 	content := container.New(
 		layout.NewVBoxLayout(),
+		toolbar,
 		input,
 		container.NewGridWithColumns(2, widget.NewLabel("exchange"), exchangeEntry, widget.NewLabel("routing key"), keyEntry),
 		sendButton,
 	)
 
 	myWindow.SetContent(content)
+
+	r.QueueConnection, _ = queue.GetConn(r.App.Preferences().StringWithFallback("RabbitMQUrl", RABBITMQ_LOCAL_URL))
+	defer r.QueueConnection.Connection.Close()
 
 	myWindow.ShowAndRun()
 }
