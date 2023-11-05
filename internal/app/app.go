@@ -3,6 +3,8 @@ package app
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -21,23 +23,29 @@ const RABBITMQ_LOCAL_URL = "amqp://localhost:5672/"
 type Rabbit struct {
 	QueueConnection queue.Conn
 	App             fyne.App
+	Log             []string
+	LogsWindow      fyne.Window
 }
 
 func NewRabbit() *Rabbit {
+	app := app.NewWithID("com.example.rabbit")
+
 	return &Rabbit{
 		QueueConnection: queue.Conn{},
-		App:             app.NewWithID("com.example.rabbit"),
+		App:             app,
+		Log:             []string{},
+		LogsWindow:      nil,
 	}
 }
 
-func (r Rabbit) Start() {
+func (r *Rabbit) Start() {
 	r.App.Settings().SetTheme(theme.DarkTheme())
 
-	myWindow := r.App.NewWindow("🐇")
-	myWindow.SetMaster()
-	myWindow.SetFixedSize(true)
-	myWindow.CenterOnScreen()
-	myWindow.Resize(fyne.NewSize(400, 530))
+	mainWindow := r.App.NewWindow("🐇")
+	mainWindow.SetMaster()
+	mainWindow.SetFixedSize(true)
+	mainWindow.CenterOnScreen()
+	mainWindow.Resize(fyne.NewSize(400, 530))
 
 	messageBinding := binding.NewString()
 
@@ -59,7 +67,7 @@ func (r Rabbit) Start() {
 
 	sendButton := widget.NewButton("send", func() {
 		if (r.QueueConnection == queue.Conn{}) {
-			errorDialog := dialog.NewError(errors.New("can't connect to RabbitMQ"), myWindow)
+			errorDialog := dialog.NewError(errors.New("can't connect to RabbitMQ"), mainWindow)
 			errorDialog.Show()
 			return
 		}
@@ -74,12 +82,39 @@ func (r Rabbit) Start() {
 		})
 
 		if err != nil {
-			errorDialog := dialog.NewError(err, myWindow)
+			errorDialog := dialog.NewError(err, mainWindow)
 			errorDialog.Show()
+		} else {
+			r.AddLog(fmt.Sprintf("-> %s (%s)", exchange, key))
 		}
 	})
 
 	toolbar := widget.NewToolbar(
+		widget.NewToolbarAction(theme.ListIcon(), func() {
+			for _, w := range r.App.Driver().AllWindows() {
+				if w.Title() == "[logs]" {
+					return
+				}
+			}
+
+			r.LogsWindow = r.App.NewWindow("[logs]")
+			r.LogsWindow.Resize(fyne.NewSize(400, 400))
+
+			list := widget.NewList(
+				func() int {
+					return len(r.Log)
+				},
+				func() fyne.CanvasObject {
+					return widget.NewLabel("template")
+				},
+				func(i widget.ListItemID, o fyne.CanvasObject) {
+					o.(*widget.Label).SetText(r.Log[i])
+				},
+			)
+
+			r.LogsWindow.SetContent(list)
+			r.LogsWindow.Show()
+		}),
 		widget.NewToolbarSpacer(),
 		widget.NewToolbarAction(theme.SettingsIcon(), func() {
 			for _, w := range r.App.Driver().AllWindows() {
@@ -126,10 +161,24 @@ func (r Rabbit) Start() {
 		sendButton,
 	)
 
-	myWindow.SetContent(content)
+	mainWindow.SetContent(content)
 
-	r.QueueConnection, _ = queue.GetConn(r.App.Preferences().StringWithFallback("RabbitMQUrl", RABBITMQ_LOCAL_URL))
-	defer r.QueueConnection.Connection.Close()
+	conn, err := queue.GetConn(r.App.Preferences().StringWithFallback("RabbitMQUrl", RABBITMQ_LOCAL_URL))
+	if err != nil {
+		errorDialog := dialog.NewError(err, mainWindow)
+		errorDialog.Show()
+	} else {
+		r.AddLog("connected to RabbitMQ")
+		r.QueueConnection = conn
+		defer r.QueueConnection.Connection.Close()
+	}
 
-	myWindow.ShowAndRun()
+	mainWindow.ShowAndRun()
+}
+
+func (r *Rabbit) AddLog(s string) {
+	r.Log = append(r.Log, fmt.Sprintf("[%v] %s", time.Now().Format(time.TimeOnly), s))
+	if r.LogsWindow != nil {
+		r.LogsWindow.Content().Refresh()
+	}
 }
